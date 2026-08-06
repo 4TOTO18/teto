@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="assets/teto.ico" type="image/x-icon">
+  <title>teto</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: #0d0d11;
+      color: #fff;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+      user-select: none;
+    }
+    #game-wrapper {
+      position: relative;
+      width: 1280px;
+      height: 720px;
+      max-width: 95vw;
+      max-height: 80vh;
+      aspect-ratio: 16 / 9;
+      border: 5px solid #e61c37;
+      box-shadow: 0 0 35px rgba(230, 28, 55, 0.6);
+      background: #1a0507;
+      overflow: hidden;
+    }
+    canvas { width: 100%; height: 100%; display: block; }
+    .ui-panel {
+      margin-top: 20px;
+      display: flex;
+      gap: 20px;
+      align-items: center;
+    }
+    .btn {
+      background: #e61c37;
+      color: #fff;
+      border: none;
+      padding: 14px 32px;
+      font-size: 18px;
+      font-weight: bold;
+      cursor: pointer;
+      border-radius: 6px;
+      transition: background 0.2s, transform 0.1s;
+    }
+    .btn:hover { background: #ff2a4b; transform: scale(1.03); }
+    .hint { color: #ccc; font-size: 16px; }
+  </style>
+</head>
+<body>
+
+  <div id="game-wrapper">
+    <canvas id="gameCanvas" width="1280" height="720"></canvas>
+  </div>
+
+  <div class="ui-panel">
+    <button class="btn" id="startBtn">▶ Начать / Музыка</button>
+    <span class="hint">Удар: <b>ПРОБЕЛ</b> или <b>КЛИК МЫШИ</b></span>
+  </div>
+
+  <audio id="bgm" loop src="assets/bgm.mp3"></audio>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const bgm = document.getElementById('bgm');
+    const startBtn = document.getElementById('startBtn');
+
+    // --- 1. ТЕКСТУРЫ И СПРАЙТЫ ---
+    const assets = {
+      bg: new Image(),
+      heroIdle: new Image(),
+      heroHit: new Image(),
+      zombie: new Image()
+    };
+
+    assets.bg.src = 'assets/bg.png';
+    assets.heroIdle.src = 'assets/hero_idle.png';
+    assets.heroHit.src = 'assets/hero_hit.png';
+    assets.zombie.src = 'assets/zombie.png';
+
+    // --- 2. ИГРОВЫЕ ПАРАМЕТРЫ ---
+    const HIT_ZONE_X = 290; // Увеличенная зона удара
+    const HIT_RANGE = 70;   // Допустимое окно тайминга
+
+    let isPlaying = false;
+    let score = 0;
+    let combo = 0;
+    let health = 100;
+    let isSwinging = false;
+    let swingTimer = null;
+    let zombies = [];
+    let spawnTimer = 0;
+    let lastHitText = { text: '', alpha: 0, x: 0, y: 0, color: '#fff' };
+
+    // --- 3. ЛОГИКА УДАРА ---
+    function performHit() {
+      if (!isPlaying) return;
+
+      isSwinging = true;
+      clearTimeout(swingTimer);
+      swingTimer = setTimeout(() => { isSwinging = false; }, 180);
+
+      let targetIndex = -1;
+      let minDistance = Infinity;
+
+      zombies.forEach((z, index) => {
+        const dist = Math.abs(z.x - HIT_ZONE_X);
+        if (dist < HIT_RANGE && dist < minDistance) {
+          minDistance = dist;
+          targetIndex = index;
+        }
+      });
+
+      if (targetIndex !== -1) {
+        zombies.splice(targetIndex, 1);
+        score += 100 + (combo * 10);
+        combo++;
+        showFeedback('PERFECT!', HIT_ZONE_X, 320, '#00ffcc');
+      } else {
+        combo = 0;
+        showFeedback('MISS!', HIT_ZONE_X, 320, '#ff3366');
+      }
+    }
+
+    function showFeedback(text, x, y, color) {
+      lastHitText = { text, alpha: 1.0, x, y, color };
+    }
+
+    // --- 4. ОБНОВЛЕНИЕ КАДРА ---
+    function spawnZombie() {
+      zombies.push({
+        x: canvas.width + 80,
+        speed: 5 + Math.random() * 2.5
+      });
+    }
+
+    function update() {
+      if (!isPlaying) return;
+
+      spawnTimer++;
+      if (spawnTimer > 65) {
+        spawnZombie();
+        spawnTimer = 0;
+      }
+
+      for (let i = zombies.length - 1; i >= 0; i--) {
+        const z = zombies[i];
+        z.x -= z.speed;
+
+        if (z.x < 150) {
+          zombies.splice(i, 1);
+          health -= 15;
+          combo = 0;
+          showFeedback('DAMAGE!', 180, 400, '#ff0000');
+          if (health <= 0) gameOver();
+        }
+      }
+    }
+
+    // --- 5. ОТРИСОВКА ---
+    function render() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Фон
+      if (assets.bg.complete && assets.bg.naturalWidth > 0) {
+        ctx.drawImage(assets.bg, 0, 0, canvas.width, canvas.height);
+      } else {
+        ctx.fillStyle = '#bc1b2c';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = '#1c1b26';
+        ctx.fillRect(0, 440, canvas.width, 280);
+      }
+
+      // Направляющая линия тайминга
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+      ctx.lineWidth = 3;
+      ctx.setLineDash([8, 8]);
+      ctx.beginPath();
+      ctx.moveTo(HIT_ZONE_X, 0);
+      ctx.lineTo(HIT_ZONE_X, canvas.height);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Герой
+      const currentHeroImg = isSwinging ? assets.heroHit : assets.heroIdle;
+      if (currentHeroImg.complete && currentHeroImg.naturalWidth > 0) {
+        ctx.drawImage(currentHeroImg, 80, 280, 250, 290);
+      } else {
+        ctx.fillStyle = isSwinging ? '#ffe600' : '#ffffff';
+        ctx.fillRect(120, 320, 90, 190);
+        ctx.fillStyle = '#dddddd';
+        ctx.fillRect(isSwinging ? 210 : 150, isSwinging ? 360 : 240, 60, 18);
+      }
+
+      // Зомби
+      zombies.forEach(z => {
+        if (assets.zombie.complete && assets.zombie.naturalWidth > 0) {
+          ctx.drawImage(assets.zombie, z.x - 60, 310, 160, 260);
+        } else {
+          ctx.fillStyle = '#445566';
+          ctx.fillRect(z.x - 40, 330, 80, 180);
+        }
+      });
+
+      // Текст фидбека
+      if (lastHitText.alpha > 0) {
+        ctx.save();
+        ctx.globalAlpha = lastHitText.alpha;
+        ctx.fillStyle = lastHitText.color;
+        ctx.font = '900 42px sans-serif';
+        ctx.fillText(lastHitText.text, lastHitText.x - 60, lastHitText.y);
+        ctx.restore();
+        lastHitText.alpha -= 0.025;
+        lastHitText.y -= 0.7;
+      }
+
+      // Интерфейс
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 30px sans-serif';
+      ctx.fillText(`Счет: ${score}`, 30, 50);
+      ctx.fillText(`Комбо: x${combo}`, 30, 90);
+
+      // Шкала ХП
+      ctx.fillStyle = '#222';
+      ctx.fillRect(930, 30, 320, 30);
+      ctx.fillStyle = health > 30 ? '#00ffcc' : '#ff2a4b';
+      ctx.fillRect(930, 30, Math.max(0, health * 3.2), 30);
+    }
+
+    function gameLoop() {
+      update();
+      render();
+      requestAnimationFrame(gameLoop);
+    }
+
+    function startGame() {
+      score = 0;
+      combo = 0;
+      health = 100;
+      zombies = [];
+      isPlaying = true;
+      bgm.play().catch(() => {});
+    }
+
+    function gameOver() {
+      isPlaying = false;
+      bgm.pause();
+      alert(`Игра окончена! Ваш счет: ${score}`);
+    }
+
+    // События
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'Space') {
+        e.preventDefault();
+        performHit();
+      }
+    });
+
+    canvas.addEventListener('mousedown', performHit);
+    startBtn.addEventListener('click', startGame);
+
+    gameLoop();
+  </script>
+</body>
+</html>
